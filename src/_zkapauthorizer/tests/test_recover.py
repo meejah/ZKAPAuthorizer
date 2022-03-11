@@ -3,8 +3,7 @@ Tests for ``_zkapauthorizer.recover``, the replication recovery system.
 """
 
 from asyncio import run
-from sqlite3 import Connection, connect
-from typing import Iterator
+from sqlite3 import connect
 
 from allmydata.client import read_config
 from fixtures import TempDir
@@ -44,6 +43,7 @@ from ..recover import (
     recover,
     setup_tahoe_lafs_replication,
 )
+from ..replicate import snapshot
 from ..tahoe import MemoryGrid, Tahoe, link, make_directory, upload
 from .fixtures import Treq
 from .matchers import equals_database, matches_capability
@@ -58,14 +58,6 @@ from .strategies import (
     tahoe_configs,
     updates,
 )
-
-
-def snapshot(connection: Connection) -> Iterator[str]:
-    """
-    Take a snapshot of the database reachable via the given connection.
-    """
-    for statement in connection.iterdump():
-        yield statement + "\n"
 
 
 class SnapshotMachine(RuleBasedStateMachine):
