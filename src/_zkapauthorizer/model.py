@@ -22,7 +22,7 @@ from functools import wraps
 from json import loads
 from sqlite3 import Cursor, OperationalError
 from sqlite3 import connect as _connect
-from typing import Callable
+from typing import Callable, Iterator
 
 import attr
 from aniso8601 import parse_datetime
@@ -262,6 +262,9 @@ class VoucherStore(object):
             now,
             conn,
         )
+
+    def snapshot(self) -> Iterator[str]:
+        return self._connection.snapshot()
 
     @with_cursor
     def call_if_empty(self, cursor, f: Callable[[Cursor], None]) -> None:

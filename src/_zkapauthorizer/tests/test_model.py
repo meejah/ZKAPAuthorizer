@@ -20,6 +20,7 @@ Tests for ``_zkapauthorizer.model``.
 from datetime import datetime, timedelta
 from errno import EACCES
 from os import mkdir
+from sqlite3 import connect
 from unittest import skipIf
 
 from fixtures import TempDir
@@ -68,6 +69,7 @@ from ..model import (
     VoucherStore,
     memory_connect,
 )
+from ..recover import recover
 from .fixtures import ConfiglessMemoryVoucherStore, TemporaryVoucherStore
 from .matchers import raises
 from .strategies import (
@@ -402,6 +404,43 @@ class VoucherStoreTests(TestCase):
                 lambda: now,
             ),
             raises(StoreOpenError),
+        )
+
+
+class VoucherStoreSnapshotTests(TestCase):
+    """
+    Tests for ``VoucherStore.snapshot``.
+    """
+
+    @given(
+        posix_safe_datetimes(),
+        vouchers(),
+        integers(min_value=1, max_value=2 ** 63 - 1),
+        lists(random_tokens(), unique=True),
+    )
+    def test_vouchers(self, now, voucher, expected, tokens):
+        """
+        Vouchers are present in the snapshot.
+        """
+        store = self.useFixture(
+            ConfiglessMemoryVoucherStore(get_now=lambda: now),
+        ).store
+        store.add(voucher, expected, 0, lambda: tokens)
+        snapshot = list(store.snapshot())
+
+        connection = connect(":memory:")
+        cursor = connection.cursor()
+        with connection:
+            recover(snapshot, cursor)
+
+        recovered = VoucherStore(
+            store.pass_value, store.database_path, store.now, connection
+        )
+        self.assertThat(
+            recovered.get(voucher),
+            Equals(
+                Voucher(voucher, expected, now),
+            ),
         )
 
 
