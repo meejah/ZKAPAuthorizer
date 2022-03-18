@@ -41,9 +41,11 @@ from typing import Iterator
 from attrs import define
 
 
-def connect_with_replication(connect, *args, **kwargs):
-    conn = connect(*args, **kwargs)
-    return _ReplicationCapableConnection(conn)
+def with_replication(connection: Connection):
+    """
+    Wrap a replicating support layer around the given connection.
+    """
+    return _ReplicationCapableConnection(connection)
 
 
 @define
