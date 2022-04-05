@@ -243,6 +243,11 @@ class _ReplicationCapableCursor:
         return self._cursor.close()
 
     def execute(self, statement, row=None):
+        """
+        sqlite's Cursor API
+
+        :param row: the arguments
+        """
         if row is None:
             args = (statement,)
         else:

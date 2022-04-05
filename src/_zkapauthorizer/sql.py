@@ -8,6 +8,7 @@ to support testing the replication/recovery system.
 from enum import Enum, auto
 from sqlite3 import Cursor
 from typing import Union
+from sqlparse import parse
 
 from attrs import define
 
@@ -202,3 +203,11 @@ def create_table(name: str, table: Table) -> str:
     """
     columns = ", ".join(column_ddl(name, column) for (name, column) in table.columns)
     return f"CREATE TABLE {escape_identifier(name)} ({columns})"
+
+
+def statement_mutates(statement):
+    """
+    predicate to decide if `statement` will change the database
+    """
+    (statement,) = parse(statement)
+    return statement.tokens[0].normalized not in {"SELECT"}
