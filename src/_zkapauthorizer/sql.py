@@ -156,6 +156,30 @@ class Update:
 
 
 @define(frozen=True)
+class Select:
+    """
+    Represent a query about a certain table
+
+    :ivar table_name: valid SQL identifier for a table
+    """
+
+    table_name: str
+
+    def statement(self):
+        return f"SELECT * FROM {escape_identifier(self.table_name)}"
+
+    def bound_statement(self, cursor):
+        """
+        :returns: the statement with all values interpolated into it
+            rather than as separate values
+        """
+        return self.statement()
+
+    def arguments(self):
+        return tuple()
+
+
+@define(frozen=True)
 class Delete:
     """
     Represent the deletion of some rows from a table.
