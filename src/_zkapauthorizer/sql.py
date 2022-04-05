@@ -8,9 +8,9 @@ to support testing the replication/recovery system.
 from enum import Enum, auto
 from sqlite3 import Cursor
 from typing import Union
-from sqlparse import parse
 
 from attrs import define
+from sqlparse import parse
 
 SQLType = Union[int, float, str, bytes, None]
 
