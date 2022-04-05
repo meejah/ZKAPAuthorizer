@@ -66,6 +66,8 @@ from attrs import define, frozen
 from compose import compose
 from twisted.python.lockfile import FilesystemLock
 
+from .sql import statement_mutates
+
 from .config import REPLICA_RWCAP_BASENAME
 from .tahoe import Tahoe, attenuate_writecap
 
@@ -253,6 +255,8 @@ class _ReplicationCapableCursor:
         else:
             args = (statement, row)
         self._cursor.execute(*args)
+        if statement_mutates(statement):
+            self._observe_mutations(statement, (row, ))
 
     def fetchall(self):
         return self._cursor.fetchall()
@@ -265,6 +269,67 @@ class _ReplicationCapableCursor:
 
     def executemany(self, statement, rows):
         self._cursor.executemany(statement, rows)
+        if statement_mutates(statement):
+            self._observe_mutations(statement, rows)
+
+    def _observe_mutations(self, statement, rows):
+        """
+        One or more statements that mutate the database have been
+        executed. The transaction is still active. Notify observers.
+        """
+        for ob in self._observers:
+            ob()
+
+
+@define
+class MutationObserver:
+
+    _store: VoucherStore
+    _queue_event_stream_upload: Callable[[], None]
+    _accumulated_size: int = 0
+
+    def observed_event(self, cursor, bound_statement):
+        """
+        A mutating SQL statement was observed by the cursor
+        """
+        self._store.add_event.wrapped(cursor, bound_statement)
+        if self.big_enough() or self.important(bound_statement):
+            self._queue_event_stream_upload()
+            self._accumulated_size = 0
+
+    def big_enough(self):
+        ...
+
+
+
+class Service:
+
+    _trigger = DeferredSemaphore(1)
+
+    def startService(self):
+        self._trigger.acquire()
+        d = do_upload()
+        d.addErrback(print)
+        return
+
+    def queue_upload(self):
+        if self._trigger.tokens:
+            self._trigger.release()
+        else:
+            # we're already uploading
+            pass
+
+    async def do_upload(self):
+        """
+        """
+        while True:
+            await self._trigger.acquire()
+            es = self._store.get_events()
+            immutable = await self._client.upload(es)
+            await self._client.link("event-stream-{}".format(es.higest_sequence()), immutable)
+            # prune the database
+            self._store.prune(es)
+
 
 
 def netstring(bs: bytes) -> bytes:
