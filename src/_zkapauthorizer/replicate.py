@@ -64,11 +64,11 @@ from typing import BinaryIO, Callable, Iterator, Optional
 import cbor2
 from attrs import Factory, define, frozen
 from compose import compose
-from twisted.internet.defer import DeferredSemaphore
+from twisted.internet.defer import Deferred, DeferredSemaphore
 from twisted.python.lockfile import FilesystemLock
 
 from .config import REPLICA_RWCAP_BASENAME
-from .sql import statement_mutates
+from .sql import bind_arguments, statement_mutates
 from .tahoe import Tahoe, attenuate_writecap
 
 
@@ -413,7 +413,7 @@ class ReplicationService:
         # self._accumulated_size = sum(len(change.statement) for change in self._store.get_events().changes)
         if not self.big_enough():
             self._trigger.acquire()
-        d = do_upload()
+        d = Deferred.fromCoroutine(self.wait_for_uploads())
         d.addErrback(print)
 
         self._connection.add_mutation_observer(self.observed_event)
@@ -434,7 +434,7 @@ class ReplicationService:
             await self._trigger.acquire()
             try:
                 await self._do_one_upload()
-            except Exception as e:
+            except Exception:
                 # probably log the error?
                 pass
 
@@ -445,11 +445,11 @@ class ReplicationService:
         events = self._store.get_events()
         # upload latest event-stream
         await self._uploader(
-            "event-stream-{}".format(es.higest_sequence()),
+            "event-stream-{}".format(events.higest_sequence()),
             events.to_bytes,
         )
         # prune the database
-        self._store.prune_events_to(es.higest_sequence())
+        self._store.prune_events_to(events.higest_sequence())
 
     def observed_event(self, cursor, important, statement, args):
         """

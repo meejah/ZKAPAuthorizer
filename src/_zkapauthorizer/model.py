@@ -34,10 +34,9 @@ from zope.interface import Interface, implementer
 
 from ._base64 import urlsafe_b64decode
 from ._json import dumps_utf8
-from .replicate import (
+from .replicate import (  # _ReplicationCapableConnection,
     Change,
     EventStream,
-    _ReplicationCapableConnection,
     with_replication,
 )
 from .schema import get_schema_upgrades, get_schema_version, run_schema_upgrades
