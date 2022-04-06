@@ -62,14 +62,13 @@ from sqlite3 import Connection, Cursor
 from typing import BinaryIO, Callable, Iterator, Optional
 
 import cbor2
-from attrs import define, frozen, Factory
+from attrs import Factory, define, frozen
 from compose import compose
-from twisted.python.lockfile import FilesystemLock
 from twisted.internet.defer import DeferredSemaphore
-
-from .sql import statement_mutates
+from twisted.python.lockfile import FilesystemLock
 
 from .config import REPLICA_RWCAP_BASENAME
+from .sql import statement_mutates
 from .tahoe import Tahoe, attenuate_writecap
 
 
@@ -180,6 +179,7 @@ async def setup_tahoe_lafs_replication(client: Tahoe) -> str:
     # Return the read-cap
     return rocap
 
+
 def with_replication(connection: Connection):
     """
     Wrap a replicating support layer around the given connection.
@@ -270,7 +270,7 @@ class _ReplicationCapableCursor:
             args = (statement, row)
         self._cursor.execute(*args)
         if statement_mutates(statement):
-            self._observe_mutations(statement, (row, ))
+            self._observe_mutations(statement, (row,))
 
     def fetchall(self):
         return self._cursor.fetchall()
@@ -369,7 +369,9 @@ def get_tahoe_lafs_direntry_uploader(
         itself to facilitate retrying.
     """
 
-    async def upload(entry_name: str, get_data_provider: Callable[[], BinaryIO]) -> None:
+    async def upload(
+        entry_name: str, get_data_provider: Callable[[], BinaryIO]
+    ) -> None:
         await tahoe_lafs_uploader(
             client, directory_mutable_cap, get_data_provider, entry_name
         )
@@ -383,6 +385,7 @@ class _Important:
     A context-manager to set and unset the ._important flag on a
     _ReplicationCapableConnection
     """
+
     _replication_conn: _ReplicationCapableConnection
 
     def __enter__(self):
@@ -407,7 +410,7 @@ class ReplicationService:
         # XXX this will be a bigger number than we had before .. but maybe fine
         self._accumulated_size = len(self._store.get_events().to_bytes())
         # XXX
-        #self._accumulated_size = sum(len(change.statement) for change in self._store.get_events().changes)
+        # self._accumulated_size = sum(len(change.statement) for change in self._store.get_events().changes)
         if not self.big_enough():
             self._trigger.acquire()
         d = do_upload()
@@ -434,7 +437,6 @@ class ReplicationService:
             except Exception as e:
                 # probably log the error?
                 pass
-
 
     async def _do_one_upload(self):
         """

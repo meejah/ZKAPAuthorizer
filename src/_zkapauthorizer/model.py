@@ -34,7 +34,12 @@ from zope.interface import Interface, implementer
 
 from ._base64 import urlsafe_b64decode
 from ._json import dumps_utf8
-from .replicate import Change, EventStream, with_replication, _ReplicationCapableConnection
+from .replicate import (
+    Change,
+    EventStream,
+    _ReplicationCapableConnection,
+    with_replication,
+)
 from .schema import get_schema_upgrades, get_schema_version, run_schema_upgrades
 from .storage_common import (
     get_configured_pass_value,
@@ -836,7 +841,7 @@ class VoucherStore(object):
             FROM [event-stream]
             WHERE [sequence-number] <= (?)
             """,
-            (sequence_number, )
+            (sequence_number,),
         )
         cursor.fetchall()
 
