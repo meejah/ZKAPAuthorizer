@@ -180,6 +180,21 @@ async def setup_tahoe_lafs_replication(client: Tahoe) -> str:
     return rocap
 
 
+@define
+class _Important:
+    """
+    A context-manager to set and unset the ._important flag on a
+    _ReplicationCapableConnection
+    """
+    _replication_conn: _ReplicationCapableConnection
+
+    def __enter__(self):
+        self._replication_conn._important = True
+
+    def __exit__(self, *args):
+        self._replication_conn._important = False
+
+
 def with_replication(connection: Connection):
     """
     Wrap a replicating support layer around the given connection.
@@ -198,7 +213,13 @@ class _ReplicationCapableConnection:
     additional functionality to support replication.
     """
 
+    # the "real" / normal sqlite connection
     _conn: Connection
+
+    # true while statements are "important" (which is pased along to
+    # the observers and interpreted as being "important data that the
+    # user will be interested in preserving")
+    _important: bool
 
     def snapshot(self) -> bytes:
         """
@@ -218,6 +239,13 @@ class _ReplicationCapableConnection:
 
     def cursor(self):
         return _ReplicationCapableCursor(self._conn.cursor())
+
+    def important(self):
+        """
+        Create a new context-manager that -- while active -- sets the
+        'important' flag to true and resets it afterwards.
+        """
+        return _Important(self)
 
 
 @define

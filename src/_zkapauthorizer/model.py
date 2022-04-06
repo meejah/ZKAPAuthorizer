@@ -251,6 +251,7 @@ class VoucherStore(object):
     database_path = attr.ib(validator=attr.validators.instance_of(FilePath))
     now = attr.ib()
 
+    # _ReplicationCapableConnection
     _connection = attr.ib()
 
     @classmethod
@@ -363,7 +364,6 @@ class VoucherStore(object):
 
         :param list[RandomToken]: The tokens to add alongside the voucher.
         """
-        cursor.important()
         now = self.now()
         if not isinstance(now, datetime):
             raise TypeError("{} returned {}, expected datetime".format(self.now, now))
@@ -397,25 +397,26 @@ class VoucherStore(object):
                 voucher=voucher_text,
                 counter=counter,
             )
-            cursor.execute(
-                """
-                INSERT OR IGNORE INTO [vouchers] ([number], [expected-tokens], [created]) VALUES (?, ?, ?)
-                """,
-                (voucher_text, expected_tokens, self.now()),
-            )
-            cursor.executemany(
-                """
-                INSERT INTO [tokens] ([voucher], [counter], [text]) VALUES (?, ?, ?)
-                """,
-                list(
-                    (
-                        voucher_text,
-                        counter,
-                        token.token_value.decode("ascii"),
-                    )
-                    for token in tokens
-                ),
-            )
+            with cursor.important():
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO [vouchers] ([number], [expected-tokens], [created]) VALUES (?, ?, ?)
+                    """,
+                    (voucher_text, expected_tokens, self.now()),
+                )
+                cursor.executemany(
+                    """
+                    INSERT INTO [tokens] ([voucher], [counter], [text]) VALUES (?, ?, ?)
+                    """,
+                    list(
+                        (
+                            voucher_text,
+                            counter,
+                            token.token_value.decode("ascii"),
+                        )
+                        for token in tokens
+                    ),
+                )
         return tokens
 
     @with_cursor
