@@ -963,6 +963,7 @@ class EventStreamTests(TestCase):
 
     @given(
         tahoe_configs(),
+        posix_safe_datetimes(),
         lists(
             tuples(
                 sampled_from([inserts, deletes, updates]),
@@ -974,7 +975,7 @@ class EventStreamTests(TestCase):
             min_size=2,
         ),
     )
-    def test_event_stream_prune(self, get_config, changes):
+    def test_event_stream_prune(self, get_config, now, changes):
         """
         We can prune the event-stream
         """
