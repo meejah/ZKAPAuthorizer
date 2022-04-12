@@ -972,7 +972,7 @@ class EventStreamTests(TestCase):
                 lambda x: x[0](x[1], x[2]),
             ),
             min_size=2,
-        )
+        ),
     )
     def test_event_stream_prune(self, get_config, changes):
         """
@@ -997,8 +997,7 @@ class EventStreamTests(TestCase):
         post_events = store.get_events()
 
         self.assertThat(
-            len(post_events.changes) + where,
-            Equals(len(pre_events.changes))
+            len(post_events.changes) + where, Equals(len(pre_events.changes))
         )
 
 
