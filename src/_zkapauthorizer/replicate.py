@@ -481,6 +481,7 @@ class _SketchReplicationService:
         return self._accumulated_size >= 570000
 
 
+@define
 class _ReplicationService(Service):
     """
     Perform all activity related to maintaining a remote replica of the local
@@ -494,7 +495,7 @@ class _ReplicationService(Service):
 
     name = "replication-service"  # type: ignore # Service assigns None, screws up type inference
 
-    _connection: _ReplicationCapableConnection
+    _connection: _ReplicationCapableConnection = field()
     _replicating: Optional[Deferred] = field(init=False, default=None)
 
     def startService(self) -> None:
