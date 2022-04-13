@@ -62,16 +62,16 @@ from sqlite3 import Connection, Cursor
 from typing import BinaryIO, Callable, Iterator, Optional
 
 import cbor2
-from attrs import define, field, frozen, Factory
+from attrs import Factory, define, field, frozen
 from compose import compose
 from twisted.application.service import IService, Service
-from twisted.internet.defer import CancelledError, Deferred, succeed, DeferredSemaphore
+from twisted.internet.defer import CancelledError, Deferred, DeferredSemaphore, succeed
 from twisted.python.failure import Failure
 from twisted.python.filepath import FilePath
 from twisted.python.lockfile import FilesystemLock
 
-from .sql import statement_mutates
 from .config import REPLICA_RWCAP_BASENAME, Config
+from .sql import statement_mutates
 from .tahoe import ITahoeClient, attenuate_writecap
 
 

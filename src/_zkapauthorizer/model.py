@@ -38,7 +38,12 @@ from zope.interface import Interface, implementer
 from ._base64 import urlsafe_b64decode
 from ._json import dumps_utf8
 from ._types import Connect, GetTime
-from .replicate import Change, EventStream, with_replication, _ReplicationCapableConnection
+from .replicate import (
+    Change,
+    EventStream,
+    _ReplicationCapableConnection,
+    with_replication,
+)
 from .schema import get_schema_upgrades, get_schema_version, run_schema_upgrades
 from .storage_common import pass_value_attribute, required_passes
 from .validators import greater_than, has_length, is_base64_encoded
