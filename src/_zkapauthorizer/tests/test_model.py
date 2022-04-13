@@ -78,7 +78,7 @@ from ..recover import (
     recover,
 )
 from ..replicate import Change, EventStream
-from .fixtures import ConfiglessMemoryVoucherStore, TempDir, TemporaryVoucherStore
+from .fixtures import ConfiglessMemoryVoucherStore, TemporaryVoucherStore
 from .matchers import raises
 from .strategies import (
     deletes,
