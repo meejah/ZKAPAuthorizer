@@ -406,31 +406,58 @@ class _Important:
         self._replication_conn._important = False
 
 
-class _SketchReplicationService:
+@define
+class _ReplicationService(Service):
     """
-    This service uploads event-streams
+    Perform all activity related to maintaining a remote replica of the local
+    ZKAPAuthorizer database.
+
+    :ivar _connection: A connection to the database being replicated.
+
+    :ivar _replicating: The long-running replication operation.  This is never
+        expected to complete but it will be cancelled when the service stops.
     """
+
+    name = "replication-service"  # type: ignore # Service assigns None, screws up type inference
+
+    _connection: _ReplicationCapableConnection = field()
+    _replicating: Optional[Deferred] = field(init=False, default=None)
 
     _store: None  #: VoucherStore
     _uploader: Callable[[str, BinaryIO], None]
-    _connection: _ReplicationCapableConnection
     _accumulated_size: int = 0
     _trigger = DeferredSemaphore(1)
 
-    def startService(self):
-        # XXX this will be a bigger number than we had before .. but maybe fine
+    def startService(self) -> None:
+        super().startService()
+
+        # restore our state .. this number will be bigger than what we
+        # would have recorded through "normal" means which only counts
+        # the statement-sizes .. but maybe fine?
         self._accumulated_size = len(self._store.get_events().to_bytes())
-        # XXX
-        # self._accumulated_size = sum(len(change.statement) for change in self._store.get_events().changes)
+
+        # should we do an upload immediately? or hold the lock?
         if not self.big_enough():
             self._trigger.acquire()
-        d = Deferred.fromCoroutine(self.wait_for_uploads())
-        d.addErrback(print)
 
+        # Tell the store to initiate replication when appropriate.  The
+        # service should only be created and started if replication has been
+        # turned on - so, make sure replication is turned on at the database
+        # layer.
+        self._replicating = Deferred.fromCoroutine(self.wait_for_uploads())
+        self._replicating.addErrback(self._replication_fail)
         self._connection.add_mutation_observer(self.observed_event)
-        return
+
+    def _replication_fail(self, fail):
+        """
+        Replicating has failed for some reason
+        """
+        print(f"Replication failure: {fail}")
 
     def queue_upload(self):
+        """
+        Ask for an upload to occur
+        """
         if self._trigger.tokens:
             self._trigger.release()
         else:
@@ -439,7 +466,7 @@ class _SketchReplicationService:
 
     async def wait_for_uploads(self):
         """
-        An infinite async loop that proecsses uploads
+        An infinite async loop that processes uploads
         """
         while True:
             await self._trigger.acquire()
@@ -462,50 +489,6 @@ class _SketchReplicationService:
         # prune the database
         self._store.prune_events_to(events.higest_sequence())
 
-    def observed_event(self, cursor, important, statement, args):
-        """
-        A mutating SQL statement was observed by the cursor
-        """
-        bound_statement = bind_arguments(cursor, statement, args)
-        self._store.add_event.wrapped(cursor, bound_statement)
-        # note that we're ignoring a certain amount of size overhead
-        # here: the _actual_ size will be some CBOR information and
-        # the sequence number, although the statement text should
-        # still dominate.
-        self._accumulated_size += len(bound_statement)
-        if important or self.big_enough():
-            self.queue_upload()
-            self._accumulated_size = 0
-
-    def big_enough(self):
-        return self._accumulated_size >= 570000
-
-
-@define
-class _ReplicationService(Service):
-    """
-    Perform all activity related to maintaining a remote replica of the local
-    ZKAPAuthorizer database.
-
-    :ivar _connection: A connection to the database being replicated.
-
-    :ivar _replicating: The long-running replication operation.  This is never
-        expected to complete but it will be cancelled when the service stops.
-    """
-
-    name = "replication-service"  # type: ignore # Service assigns None, screws up type inference
-
-    _connection: _ReplicationCapableConnection = field()
-    _replicating: Optional[Deferred] = field(init=False, default=None)
-
-    def startService(self) -> None:
-        super().startService()
-        # Tell the store to initiate replication when appropriate.  The
-        # service should only be created and started if replication has been
-        # turned on - so, make sure replication is turned on at the database
-        # layer.
-        self._replicating = succeed(None)
-
     def stopService(self) -> Deferred:
         """
         Cancel the replication operation and then wait for it to complete.
@@ -525,6 +508,24 @@ class _ReplicationService(Service):
         replicating.addErrback(catch_cancelled)
         replicating.cancel()
         return replicating
+
+    def observed_event(self, cursor, important, statement, args):
+        """
+        A mutating SQL statement was observed by the cursor
+        """
+        bound_statement = bind_arguments(cursor, statement, args)
+        self._store.add_event.wrapped(cursor, bound_statement)
+        # note that we're ignoring a certain amount of size overhead
+        # here: the _actual_ size will be some CBOR information and
+        # the sequence number, although the statement text should
+        # still dominate.
+        self._accumulated_size += len(bound_statement)
+        if important or self.big_enough():
+            self.queue_upload()
+            self._accumulated_size = 0
+
+    def big_enough(self):
+        return self._accumulated_size >= 570000
 
 
 def replication_service(connection) -> IService:
