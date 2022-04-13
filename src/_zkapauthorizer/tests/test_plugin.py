@@ -19,7 +19,8 @@ Tests for the Tahoe-LAFS plugin.
 from datetime import timedelta
 from functools import partial
 from io import StringIO
-from os import makedirs
+from os import mkdir
+from sqlite3 import connect
 
 from allmydata.client import config_from_string, create_client_from_config
 from allmydata.interfaces import (
@@ -55,10 +56,12 @@ from testtools.matchers import (
     MatchesAll,
     MatchesListwise,
     MatchesStructure,
+    Raises,
 )
 from testtools.twistedsupport import succeeded
 from testtools.twistedsupport._deferred import extract_result
-from twisted.internet.task import Clock
+from twisted.internet.defer import Deferred
+from twisted.internet.testing import MemoryReactorClock
 from twisted.plugin import getPlugins
 from twisted.python.filepath import FilePath
 from twisted.python.runtime import platform
@@ -68,13 +71,15 @@ from twisted.web.resource import IResource
 from twisted.plugins.zkapauthorizer import storage_server_plugin
 
 from .. import NAME
-from .._plugin import get_root_nodes, load_signing_key
+from .._plugin import ZKAPAuthorizer, get_root_nodes, load_signing_key, open_store
 from .._storage_client import IncorrectStorageServerReference
 from ..controller import DummyRedeemer, IssuerConfigurationMismatch, PaymentController
 from ..foolscap import RIPrivacyPassAuthorizedStorageServer
 from ..lease_maintenance import SERVICE_NAME, LeaseMaintenanceConfig
-from ..model import NotEnoughTokens, VoucherStore
+from ..model import NotEnoughTokens, StoreOpenError
+from ..replicate import _ReplicationService, setup_tahoe_lafs_replication
 from ..spending import GET_PASSES
+from ..tahoe import MemoryGrid
 from .common import skipIf
 from .fixtures import DetectLeakedDescriptors
 from .foolscap import DummyReferenceable, LocalRemote, get_anonymous_storage_server
@@ -83,13 +88,13 @@ from .strategies import (
     announcements,
     client_dummyredeemer_configurations,
     client_lease_maintenance_configurations,
-    clocks,
     dummy_ristretto_keys,
     lease_cancel_secrets,
     lease_maintenance_configurations,
     lease_renew_secrets,
     minimal_tahoe_configs,
     pass_counts,
+    posix_timestamps,
     ristretto_signing_keys,
     server_configurations,
     sharenum_sets,
@@ -106,6 +111,58 @@ def get_rref(interface=None):
     if interface is None:
         interface = RIPrivacyPassAuthorizedStorageServer
     return LocalRemote(DummyReferenceable(interface))
+
+
+class OpenStoreTests(TestCase):
+    @skipIf(platform.isWindows(), "Hard to prevent directory creation on Windows")
+    @given(tahoe_configs(), datetimes())
+    def test_uncreateable_store_directory(self, get_config, now):
+        """
+        If the underlying directory in the node configuration cannot be created
+        then ``open_store`` raises ``StoreOpenError``.
+        """
+        nodedir = FilePath(self.useFixture(TempDir()).join("node"))
+
+        # Create the node directory without permission to create the
+        # underlying directory.
+        mkdir(nodedir.path, 0o500)
+
+        config = get_config(nodedir.path, "tub.port")
+
+        self.assertThat(
+            partial(open_store, lambda: now, connect, config),
+            Raises(
+                AfterPreprocessing(
+                    lambda exc_info: exc_info[1],
+                    IsInstance(StoreOpenError),
+                ),
+            ),
+        )
+
+    @skipIf(
+        platform.isWindows(), "Hard to prevent database from being opened on Windows"
+    )
+    @given(tahoe_configs(), datetimes())
+    def test_unopenable_store(self, get_config, now):
+        """
+        If the underlying database file cannot be opened then ``open_store``
+        raises ``StoreOpenError``.
+        """
+        nodedir = FilePath(self.useFixture(TempDir()).join("node"))
+        nodedir.child("private").makedirs()
+
+        config = get_config(nodedir.path, "tub.port")
+
+        # Create the underlying database file.
+        open_store(lambda: now, connect, config)
+
+        # Prevent further access to it.
+        nodedir.child("private").chmod(0o000)
+
+        self.assertThat(
+            lambda: open_store(lambda: now, connect, config),
+            raises(StoreOpenError),
+        )
 
 
 class GetRRefTests(TestCase):
@@ -190,13 +247,17 @@ class ServerPluginTests(TestCase):
     ``IFoolscapStoragePlugin.get_storage_server``.
     """
 
+    def setup_example(self):
+        self.reactor = MemoryReactorClock()
+        self.plugin = ZKAPAuthorizer(NAME, self.reactor)
+
     @given(server_configurations(SIGNING_KEY_PATH))
     def test_returns_announceable(self, configuration):
         """
-        ``storage_server_plugin.get_storage_server`` returns an instance which
-        provides ``IAnnounceableStorageServer``.
+        ``ZKAPAuthorizer.get_storage_server`` returns an instance which provides
+        ``IAnnounceableStorageServer``.
         """
-        storage_server_deferred = storage_server_plugin.get_storage_server(
+        storage_server_deferred = self.plugin.get_storage_server(
             configuration,
             get_anonymous_storage_server,
         )
@@ -209,10 +270,10 @@ class ServerPluginTests(TestCase):
     def test_returns_referenceable(self, configuration):
         """
         The storage server attached to the result of
-        ``storage_server_plugin.get_storage_server`` provides
-        ``IReferenceable`` and ``IRemotelyCallable``.
+        ``ZKAPAuthorizer.get_storage_server`` provides ``IReferenceable`` and
+        ``IRemotelyCallable``.
         """
-        storage_server_deferred = storage_server_plugin.get_storage_server(
+        storage_server_deferred = self.plugin.get_storage_server(
             configuration,
             get_anonymous_storage_server,
         )
@@ -230,10 +291,10 @@ class ServerPluginTests(TestCase):
     def test_returns_serializable(self, configuration):
         """
         The storage server attached to the result of
-        ``storage_server_plugin.get_storage_server`` can be serialized by a
-        banana Broker (for Foolscap).
+        ``ZKAPAuthorizer.get_storage_server`` can be serialized by a banana
+        Broker (for Foolscap).
         """
-        storage_server_deferred = storage_server_plugin.get_storage_server(
+        storage_server_deferred = self.plugin.get_storage_server(
             configuration,
             get_anonymous_storage_server,
         )
@@ -253,12 +314,12 @@ class ServerPluginTests(TestCase):
     def test_returns_hashable(self, configuration):
         """
         The storage server attached to the result of
-        ``storage_server_plugin.get_storage_server`` is hashable for use as a
+        ``ZKAPAuthorizer.get_storage_server`` is hashable for use as a
         Python dictionary key.
 
         This is another requirement of Foolscap.
         """
-        storage_server_deferred = storage_server_plugin.get_storage_server(
+        storage_server_deferred = self.plugin.get_storage_server(
             configuration,
             get_anonymous_storage_server,
         )
@@ -274,13 +335,15 @@ class ServerPluginTests(TestCase):
             ),
         )
 
-    @given(timedeltas(min_value=timedelta(seconds=1)), clocks())
-    def test_metrics_written(self, metrics_interval, clock):
+    @given(timedeltas(min_value=timedelta(seconds=1)), posix_timestamps())
+    def test_metrics_written(self, metrics_interval, when):
         """
         When the configuration tells us where to put a metrics .prom file
         and an interval how often to do so, test that metrics are actually
         written there after the configured interval.
         """
+        self.reactor.advance(when)
+
         metrics_path = self.useFixture(TempDir()).join("metrics")
         configuration = {
             "prometheus-metrics-path": metrics_path,
@@ -289,10 +352,9 @@ class ServerPluginTests(TestCase):
             "ristretto-signing-key-path": SIGNING_KEY_PATH.path,
         }
         announceable = extract_result(
-            storage_server_plugin.get_storage_server(
+            self.plugin.get_storage_server(
                 configuration,
                 get_anonymous_storage_server,
-                reactor=clock,
             )
         )
         registry = announceable.storage_server._registry
@@ -301,11 +363,86 @@ class ServerPluginTests(TestCase):
         for i in range(2):
             g.set(i)
 
-            clock.advance(metrics_interval.total_seconds())
+            self.reactor.advance(metrics_interval.total_seconds())
             self.assertThat(
                 metrics_path,
                 has_metric(Equals("foo"), Equals(i)),
             )
+
+
+class ServiceTests(TestCase):
+    """
+    Tests for the plugin's handling of a Twisted ``IServiceCollection``.
+    """
+
+    def test_started_and_stopped(self):
+        """
+        Children of ``ZKAPAuthorizer._service`` are started when the reactor
+        starts and stopped when the reactor stops.
+        """
+        reactor = MemoryReactorClock()
+        plugin = ZKAPAuthorizer(NAME, reactor)
+
+        # MemoryReactorClock does correctly implement callWhenRunning but it
+        # does not implement shutdown hooks meaningfully... So instead of
+        # asserting about the behavior we want, assert about how the plugin
+        # pokes the reactor. :/ This is lame.  Maybe Twisted will make
+        # MemoryReactorClock better.
+        self.assertThat(
+            reactor.whenRunningHooks,
+            Equals([(plugin._service.startService, (), {})]),
+        )
+        self.assertThat(
+            reactor.triggers,
+            Equals({"before": {"shutdown": [(plugin._service.stopService, (), {})]}}),
+        )
+
+    @given(tahoe_configs().flatmap(just))
+    def test_replicating(self, get_config):
+        """
+        There is a replication service for a database which has been placed into
+        replication mode.
+        """
+        self._replication_service_test(get_config, True)
+
+    @given(tahoe_configs().flatmap(just))
+    def test_not_replicating(self, get_config):
+        """
+        There is not a replication service for a database which has not been
+        placed into replication mode.
+        """
+        self._replication_service_test(get_config, False)
+
+    def _replication_service_test(self, get_config, replicating: bool):
+        nodedir = FilePath(self.useFixture(TempDir()).join("node"))
+        node_config = get_config(nodedir.path, "tub.port")
+        grid = MemoryGrid()
+        tahoe = grid.client(FilePath(node_config._basedir))
+
+        reactor = MemoryReactorClock()
+        plugin = ZKAPAuthorizer(NAME, reactor)
+
+        if replicating:
+            # Place it into replication mode.
+            self.assertThat(
+                Deferred.fromCoroutine(setup_tahoe_lafs_replication(tahoe)),
+                succeeded(Always()),
+            )
+
+        # There is no public interface for just getting the database
+        # abstraction, so...
+        store = plugin._get_store(node_config)
+
+        def service_matches(svc):
+            return (
+                isinstance(svc, _ReplicationService)
+                and svc._connection is store._connection
+            )
+
+        self.assertThat(
+            [svc for svc in plugin._service if service_matches(svc)],
+            HasLength(1 if replicating else 0),
+        )
 
 
 def has_metric(name_matcher, value_matcher):
@@ -364,13 +501,15 @@ class ClientPluginTests(TestCase):
         ``get_storage_client`` returns an object which provides
         ``IStorageServer``.
         """
-        tempdir = self.useFixture(TempDir())
-        node_config = get_config(
-            tempdir.join("node"),
-            "tub.port",
-        )
+        reactor = MemoryReactorClock()
+        plugin = ZKAPAuthorizer(NAME, reactor)
 
-        storage_client = storage_server_plugin.get_storage_client(
+        nodedir = FilePath(self.useFixture(TempDir()).join("node"))
+        nodedir.child("private").makedirs()
+
+        node_config = get_config(nodedir.path, "tub.port")
+
+        storage_client = plugin.get_storage_client(
             node_config,
             announcement,
             get_rref,
@@ -387,9 +526,14 @@ class ClientPluginTests(TestCase):
         ``get_storage_client`` raises an exception when called with an
         announcement and local configuration which specify different issuers.
         """
-        tempdir = self.useFixture(TempDir())
+        reactor = MemoryReactorClock()
+        plugin = ZKAPAuthorizer(NAME, reactor)
+
+        nodedir = FilePath(self.useFixture(TempDir()).join("node"))
+        nodedir.child("private").makedirs()
+
         node_config = config_from_string(
-            tempdir.join("node"),
+            nodedir.path,
             "tub.port",
             config_text.encode("utf-8"),
         )
@@ -398,7 +542,7 @@ class ClientPluginTests(TestCase):
         self.addDetail("config", text_content(config_text.getvalue()))
         self.addDetail("announcement", text_content(str(announcement)))
         self.assertThat(
-            lambda: storage_server_plugin.get_storage_client(
+            lambda: plugin.get_storage_client(
                 node_config,
                 announcement,
                 get_rref,
@@ -431,13 +575,14 @@ class ClientPluginTests(TestCase):
         provider then the storage methods of the client raise exceptions that
         clearly indicate this.
         """
-        tempdir = self.useFixture(TempDir())
-        node_config = get_config(
-            tempdir.join("node"),
-            "tub.port",
-        )
+        reactor = MemoryReactorClock()
+        plugin = ZKAPAuthorizer(NAME, reactor)
 
-        storage_client = storage_server_plugin.get_storage_client(
+        nodedir = FilePath(self.useFixture(TempDir()).join("node"))
+        nodedir.child("private").makedirs()
+        node_config = get_config(nodedir.path, "tub.port")
+
+        storage_client = plugin.get_storage_client(
             node_config,
             announcement,
             partial(get_rref, RIStorageServer),
@@ -481,30 +626,32 @@ class ClientPluginTests(TestCase):
         The ``ZKAPAuthorizerStorageServer`` returned by ``get_storage_client``
         spends unblinded tokens from the plugin database.
         """
-        tempdir = self.useFixture(TempDir())
-        node_config = get_config(
-            tempdir.join("node"),
-            "tub.port",
-        )
+        reactor = MemoryReactorClock()
+        plugin = ZKAPAuthorizer(NAME, reactor)
 
-        store = VoucherStore.from_node_config(node_config, lambda: now)
+        nodedir = FilePath(self.useFixture(TempDir()).join("node"))
+        nodedir.child("private").makedirs()
+        node_config = get_config(nodedir.path, "tub.port")
 
-        controller = PaymentController(
-            store,
-            DummyRedeemer(public_key),
-            default_token_count=num_passes,
-            num_redemption_groups=1,
-            allowed_public_keys={public_key},
-            clock=Clock(),
-        )
-        # Get a token inserted into the store.
-        redeeming = controller.redeem(voucher)
-        self.assertThat(
-            redeeming,
-            succeeded(Always()),
-        )
+        # Populate the database with unspent tokens.
+        def redeem():
+            store = open_store(lambda: now, connect, node_config)
 
-        storage_client = storage_server_plugin.get_storage_client(
+            controller = PaymentController(
+                store,
+                DummyRedeemer(public_key),
+                default_token_count=num_passes,
+                num_redemption_groups=1,
+                allowed_public_keys={public_key},
+                clock=reactor,
+            )
+            # Get a token inserted into the store.
+            return controller.redeem(voucher)
+
+        self.assertThat(redeem(), succeeded(Always()))
+
+        # Try to spend a pass via the storage client plugin.
+        storage_client = plugin.get_storage_client(
             node_config,
             announcement,
             get_rref,
@@ -550,18 +697,22 @@ class ClientResourceTests(TestCase):
     ``IFoolscapStoragePlugin.get_client_resource``.
     """
 
+    def setUp(self):
+        super().setUp()
+        self.reactor = MemoryReactorClock()
+        self.plugin = ZKAPAuthorizer(NAME, self.reactor)
+
     @given(tahoe_configs())
     def test_interface(self, get_config):
         """
         ``get_client_resource`` returns an object that provides ``IResource``.
         """
-        tempdir = self.useFixture(TempDir())
-        nodedir = tempdir.join("node")
-        config = get_config(nodedir, "tub.port")
+        nodedir = FilePath(self.useFixture(TempDir()).join("node"))
+        nodedir.child("private").makedirs()
+        config = get_config(nodedir.path, "tub.port")
         self.assertThat(
-            storage_server_plugin.get_client_resource(
+            self.plugin.get_client_resource(
                 config,
-                reactor=Clock(),
             ),
             Provides([IResource]),
         )
@@ -630,11 +781,9 @@ class LeaseMaintenanceServiceTests(TestCase):
         :param rootcap: ``True`` to write some bytes to the node's ``rootcap``
             file, ``False`` otherwise.
         """
-        tempdir = self.useFixture(TempDir())
-        nodedir = tempdir.join("node")
-        privatedir = tempdir.join("node", "private")
-        makedirs(privatedir)
-        config = get_config(nodedir, "tub.port")
+        nodedir = FilePath(self.useFixture(TempDir()).join("node"))
+        nodedir.child("private").makedirs()
+        config = get_config(nodedir.path, "tub.port")
 
         # In Tahoe-LAFS 1.17 write_private_config is broken.  It mixes bytes
         # and unicode in an os.path.join() call that always fails with a
