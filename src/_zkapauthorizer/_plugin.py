@@ -66,6 +66,7 @@ from .server.spending import get_spender
 from .spending import SpendingController
 from .storage_common import BYTES_PER_PASS, get_configured_pass_value
 from .tahoe import get_tahoe_client
+from .replicate import get_replica_rwcap, get_tahoe_lafs_direntry_uploader
 
 _log = Logger()
 
@@ -143,7 +144,10 @@ class ZKAPAuthorizer(object):
         except KeyError:
             s = open_store(datetime.now, _connect, node_config)
             if is_replication_setup(node_config):
-                replication_service(s._connection).setServiceParent(self._service)
+                client = get_tahoe_client(self.reactor, node_config)
+                mutable = get_replica_rwcap(node_config)
+                uploader = get_tahoe_lafs_direntry_uploader(client, mutable)
+                replication_service(s._connection, s, uploader).setServiceParent(self._service)
             self._stores[key] = s
         return s
 

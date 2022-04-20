@@ -186,3 +186,13 @@ class ReplicationConnectionTests(TestCase):
             conn_a,
             equals_database(conn_b),
         )
+
+
+class ReplicationServiceTests(TestCase):
+    """
+    Tests for the actual replication of events with ReplicationService
+    """
+
+    def test_replicate(self):
+        """
+        """
