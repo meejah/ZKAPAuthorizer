@@ -60,6 +60,7 @@ from .replicate import (
     is_replication_setup,
     replication_service,
     setup_tahoe_lafs_replication,
+    Uploader,
 )
 from .resource import from_configuration as resource_from_configuration
 from .server.spending import get_spender
@@ -67,6 +68,7 @@ from .spending import SpendingController
 from .storage_common import BYTES_PER_PASS, get_configured_pass_value
 from .tahoe import get_tahoe_client
 from .replicate import get_replica_rwcap, get_tahoe_lafs_direntry_uploader
+from .tahoe import ITahoeClient, get_tahoe_client
 
 _log = Logger()
 
@@ -93,7 +95,9 @@ def open_store(now: GetTime, connect: Connect, node_config: Config) -> VoucherSt
     db_path = FilePath(node_config.get_private_path(CONFIG_DB_NAME))
     conn = _open_database(partial(connect, db_path.path))
     pass_value = get_configured_pass_value(node_config)
-    return VoucherStore.from_connection(pass_value, now, conn)
+    return VoucherStore.from_connection(
+        pass_value, now, conn, is_replication_setup(node_config)
+    )
 
 
 @implementer(IFoolscapStoragePlugin)
@@ -113,6 +117,8 @@ class ZKAPAuthorizer(object):
 
     name: str
     reactor: Any
+    _get_tahoe_client: Callable[[Any, Config], ITahoeClient] = field()
+
     _stores: WeakValueDictionary = field(default=Factory(WeakValueDictionary))
     _service: IServiceCollection = field()
 
@@ -149,9 +155,16 @@ class ZKAPAuthorizer(object):
                 client = get_tahoe_client(self.reactor, node_config)
                 mutable = get_replica_rwcap(node_config)
                 uploader = get_tahoe_lafs_direntry_uploader(client, mutable)
-                replication_service(s._connection, private_conn, s, uploader).setServiceParent(self._service)
+                self._add_replication_service(s, private_conn, uploader)
             self._stores[key] = s
         return s
+
+    def _add_replication_service(self, store: VoucherStore, private_conn: Connection, uploader: Uploader) -> None:
+        """
+        Create a replication service for the given database and arrange for it to
+        start and stop when the reactor starts and stops.
+        """
+        replication_service(store._connection).setServiceParent(self._service)
 
     def _get_redeemer(self, node_config, announcement):
         """
@@ -240,14 +253,19 @@ class ZKAPAuthorizer(object):
         def get_downloader(cap):
             return make_fail_downloader(work_in_progress_error)
 
-        setup_replication = partial(
-            setup_tahoe_lafs_replication,
-            get_tahoe_client(self.reactor, node_config),
-        )
+        store = self._get_store(node_config)
+
+        async def setup_replication():
+            # Setup replication
+            tahoe = self._get_tahoe_client(self.reactor, node_config)
+            await setup_tahoe_lafs_replication(tahoe)
+            # And then turn replication on for the database connection already
+            # in use.
+            self._add_replication_service(store)
 
         return resource_from_configuration(
             node_config,
-            store=self._get_store(node_config),
+            store=store,
             get_downloader=get_downloader,
             setup_replication=setup_replication,
             redeemer=self._get_redeemer(node_config, None),
@@ -295,14 +313,15 @@ def _attach_zkapauthorizer_services(self, announceable_storage_servers):
     store = storage_server_plugin._get_store(self.config)
 
     # Hook up our services.
-    for name, create in _SERVICES:
-        _maybe_attach_service(
-            reactor,
-            self,
-            store,
-            name,
-            create,
-        )
+    for name, predicate, create in _SERVICES:
+        if predicate(self.config):
+            _maybe_attach_service(
+                reactor,
+                self,
+                store,
+                name,
+                create,
+            )
 
     return result
 
@@ -377,8 +396,20 @@ def _create_maintenance_service(reactor, client_node, store: VoucherStore) -> IS
     )
 
 
+def _is_client_plugin_enabled(node_config: Config) -> bool:
+    """
+    :return: ``True`` if and only if the ZKAPAuthorizer storage client plugin
+        is enabled in the given configuration.
+    """
+    # See allmydata/storage_client.py, StorageClientConfig.from_node_config.
+    storage_plugins = node_config.get_config("client", "storage.plugins", "")
+    plugin_names = {name.strip() for name in storage_plugins.split(",")}
+    return NAME in plugin_names
+
+
 _SERVICES = [
-    (MAINTENANCE_SERVICE_NAME, _create_maintenance_service),
+    # Run the lease maintenance service on client nodes.
+    (MAINTENANCE_SERVICE_NAME, _is_client_plugin_enabled, _create_maintenance_service),
 ]
 
 
@@ -421,7 +452,11 @@ def _create_plugin():
     # Do not leak the global reactor into the module scope!
     from twisted.internet import reactor
 
-    return ZKAPAuthorizer(name=NAME, reactor=reactor)
+    return ZKAPAuthorizer(
+        name=NAME,
+        reactor=reactor,
+        get_tahoe_client=get_tahoe_client,
+    )
 
 
 storage_server_plugin = _create_plugin()

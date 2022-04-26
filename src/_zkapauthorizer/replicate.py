@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 """
 A system for replicating local SQLite3 database state to remote storage.
 
@@ -202,11 +204,24 @@ def get_replica_rwcap(config: Config) -> CapStr:
     return rwcap_file.getContent()
 
 
-def with_replication(connection: Connection):
+def with_replication(
+    connection: Connection, enable_replication: bool
+) -> _ReplicationCapableConnection:
     """
-    Wrap a replicating support layer around the given connection.
+    Wrap the given connection in a layer which is capable of entering a
+    "replication mode".  In replication mode, the wrapper stores all changes
+    made through the connection so that they are available to be replicated by
+    another component.  In normal mode, changes are not stored.
+
+    :param connection: The SQLite3 connection to wrap.
+
+    :param enable_replication: If ``True`` then the wrapper is placed in
+        "replication mode" initially.  Otherwise it is not but it can be
+        switched into that mode later.
+
+    :return: The wrapper object.
     """
-    return _ReplicationCapableConnection(connection)
+    return _ReplicationCapableConnection(connection, enable_replication)
 
 
 @define
@@ -218,15 +233,26 @@ class _ReplicationCapableConnection:
     All of this type's methods are intended to behave the same way as
     ``sqlite3.Connection``\ 's methods except they may also add some
     additional functionality to support replication.
+
+    :ivar _replicating: ``True`` if this connection is currently in
+        replication mode and is recording all executed DDL and DML statements,
+        ``False`` otherwise.
     """
 
     # the "real" / normal sqlite connection
     _conn: Connection
+    _replicating: bool
     _observers: tuple = Factory(tuple)
     _mutations: list = Factory(list)
 
     def add_mutation_observer(self, fn):
         self._observers = self._observers + (fn,)
+
+    def enable_replication(self) -> None:
+        """
+        Turn on replication support.
+        """
+        self._replicating = True
 
     def snapshot(self) -> bytes:
         """
@@ -246,8 +272,7 @@ class _ReplicationCapableConnection:
 
     def __exit__(self, *args):
         r = self._conn.__exit__(*args)
-        print("ARR", r)
-        if r is not (None, None, None):
+        if self._replicating and r != (None, None, None):
             post_txn_fns = []
             with self._conn:
                 curse = self._conn.cursor()
@@ -265,7 +290,7 @@ class _ReplicationCapableConnection:
                 yield ob(cursor, to_signal)
 
     def cursor(self):
-        return _ReplicationCapableCursor(self._conn.cursor(), self)
+        return _ReplicationCapableCursor(self._conn.cursor(), self) if self._replicating else self._conn.cursor()
 
 
 @define
@@ -396,16 +421,19 @@ async def tahoe_lafs_uploader(
     await client.link(recovery_cap, entry_name, snapshot_immutable_cap)
 
 
+Uploader = Callable[[str, Callable[[], BinaryIO]], Awaitable[None]]
+
+
 def get_tahoe_lafs_direntry_uploader(
     client: ITahoeClient,
     directory_mutable_cap: str,
-):
+) -> Uploader:
     """
     Bind a Tahoe client to a mutable directory in a callable that will
     upload some data and link it into the mutable directory under the
     given name.
 
-    :return Callable[[str, Callable[[], BinaryIO]], Awaitable[None]]:
+    :return:
         A callable that will upload some data as the latest replica
         snapshot. The data isn't given directly, but instead from a
         zero-argument callable itself to facilitate retrying.
@@ -462,6 +490,8 @@ class _ReplicationService(Service):
 
     def startService(self) -> None:
         super().startService()
+
+        self._connection.enable_replication()
 
         # restore our state .. this number will be bigger than what we
         # would have recorded through "normal" means which only counts
