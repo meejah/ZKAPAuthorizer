@@ -169,7 +169,7 @@ class ZKAPAuthorizer(object):
         Create a replication service for the given database and arrange for it to
         start and stop when the reactor starts and stops.
         """
-        replication_service(store._connection).setServiceParent(self._service)
+        replication_service(store._connection, private_conn, store, uploader).setServiceParent(self._service)
 
     def _get_redeemer(self, node_config, announcement):
         """
@@ -266,7 +266,13 @@ class ZKAPAuthorizer(object):
             await setup_tahoe_lafs_replication(tahoe)
             # And then turn replication on for the database connection already
             # in use.
-            self._add_replication_service(store)
+            client = get_tahoe_client(self.reactor, node_config)
+            mutable = get_replica_rwcap(node_config)
+            uploader = get_tahoe_lafs_direntry_uploader(client, mutable)
+            private_conn = _open_database(
+                partial(_connect, node_config.get_private_path(CONFIG_DB_NAME))
+            )
+            self._add_replication_service(store, private_conn, uploader)
 
         return resource_from_configuration(
             node_config,
