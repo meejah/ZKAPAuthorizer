@@ -143,11 +143,13 @@ class ZKAPAuthorizer(object):
             s = self._stores[key]
         except KeyError:
             s = open_store(datetime.now, _connect, node_config)
+            private_conn = _open_database(partial(_connect, node_config.get_private_path(CONFIG_DB_NAME)))
+
             if is_replication_setup(node_config):
                 client = get_tahoe_client(self.reactor, node_config)
                 mutable = get_replica_rwcap(node_config)
                 uploader = get_tahoe_lafs_direntry_uploader(client, mutable)
-                replication_service(s._connection, s, uploader).setServiceParent(self._service)
+                replication_service(s._connection, private_conn, s, uploader).setServiceParent(self._service)
             self._stores[key] = s
         return s
 

@@ -2,16 +2,38 @@
 Tests for the replication system in ``_zkapauthorizer.replicate``.
 """
 
+from ..config import CONFIG_DB_NAME
+
+from hypothesis import assume, given
+from .strategies import (
+    clocks,
+    dummy_ristretto_keys,
+    redemption_group_counts,
+    tahoe_configs,
+    voucher_counters,
+    voucher_objects,
+    vouchers,
+    datetimes,
+)
+from base64 import b64encode, urlsafe_b64encode
+from os import urandom
+from datetime import datetime
+
 from io import BytesIO
 from sqlite3 import OperationalError, ProgrammingError, connect
 
-from fixtures import TempDir
+from .fixtures import TempDir, TemporaryVoucherStore
+from .matchers import equals_database
 from testtools import TestCase
 from testtools.matchers import Equals, raises
+from twisted.python.filepath import FilePath
 
+from ..model import memory_connect
+from ..model import RandomToken
+from ..config import REPLICA_RWCAP_BASENAME
 from ..recover import recover
-from ..replicate import with_replication
-from .matchers import equals_database
+from ..replicate import with_replication, replication_service, get_replica_rwcap, get_tahoe_lafs_direntry_uploader
+from ..tahoe import MemoryGrid, attenuate_writecap
 
 
 class ReplicationConnectionTests(TestCase):
@@ -188,11 +210,65 @@ class ReplicationConnectionTests(TestCase):
         )
 
 
-class ReplicationServiceTests(TestCase):
+from twisted.trial.unittest import TestCase as TrialTestCase
+from twisted.internet.defer import inlineCallbacks, Deferred
+from allmydata.client import config_from_string
+
+
+class ReplicationServiceTests(TrialTestCase):
     """
     Tests for the actual replication of events with ReplicationService
     """
 
+    @inlineCallbacks
     def test_replicate(self):
         """
         """
+        grid = MemoryGrid()
+
+        def get_config(rootpath, portnumfile):
+            return config_from_string(rootpath, portnumfile, "")
+
+        tvs = TemporaryVoucherStore(get_config, lambda: datetime.now())
+        tvs.setUp()
+        self.addCleanup(tvs._cleanUp)
+        client = grid.client(FilePath(tvs.tempdir.path).child("node"))
+
+        rwcap_file = FilePath(tvs.config.get_private_path(REPLICA_RWCAP_BASENAME))
+        rwcap_file.setContent(b"URL:DIR2:stuff")
+
+        mutable = get_replica_rwcap(tvs.config)
+        #uploader = get_tahoe_lafs_direntry_uploader(client, mutable)
+
+        uploads = []
+        d = Deferred()
+
+        ##def uploader(name: str, get_data: Callable[[], [BinaryIO]]) -> Awaitable[None]:
+        async def uploader(name, get_data):
+            print("UPLOADER", name, get_data)
+            uploads.append((name, get_data))
+            nonlocal d
+            if d is not None:
+                d.callback(None)
+                d = None
+
+        other_connection = memory_connect(tvs.config.get_private_path(CONFIG_DB_NAME))
+        srv = replication_service(tvs.store._connection, other_connection, tvs.store, uploader)
+
+        # run the service and produce some fake voucher etc changes
+        # that cause "events" to be issued into the database
+        srv.startService()
+
+        tokens = [
+            RandomToken(b64encode(urandom(96)))
+            for _ in range(1)
+        ]
+        voucher = urlsafe_b64encode(urandom(32))
+        srv._store.add(voucher, len(tokens), 1, lambda: tokens)
+
+        yield d
+
+        # a voucher is "important" so we should have queued an upload
+        for up in uploads:
+            print(up)
+

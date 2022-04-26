@@ -6,6 +6,7 @@ to support testing the replication/recovery system.
 """
 
 import re
+from datetime import datetime
 from enum import Enum, auto
 from sqlite3 import Cursor
 from typing import Union
@@ -103,16 +104,14 @@ def quote_sql_value(cursor: Cursor, value: Union[int, float, str, bytes, None]) 
 
     :returns: the quoted value
     """
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
+    if isinstance(value, (int, float, datetime)):
         return str(value)
     if value is None:
         return "NULL"
     if isinstance(value, (str, bytes)):
         cursor.execute("SELECT quote(?);", (value,))
         return cursor.fetchall()[0][0]
-    raise ValueError("Do not know how to quote value of type f{type(value)}")
+    raise ValueError(f"Do not know how to quote value of type {type(value)}")
 
 
 def bind_arguments(cursor, statement, args):
@@ -125,7 +124,7 @@ def bind_arguments(cursor, statement, args):
     NOT appear elsewhere in the SQL.
     """
 
-    to_sub = list(args)
+    to_sub = list(args) if args is not None else []
 
     def substitute_args(match):
         return quote_sql_value(cursor, to_sub.pop(0))
@@ -253,5 +252,7 @@ def statement_mutates(statement):
     """
     predicate to decide if `statement` will change the database
     """
+    if statement == "BEGIN IMMEDIATE TRANSACTION":
+        return False
     (statement,) = parse(statement)
     return statement.get_type() not in {"SELECT"}

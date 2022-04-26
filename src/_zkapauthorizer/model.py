@@ -248,6 +248,7 @@ def path_to_memory_uri(path: FilePath) -> str:
             path=path.asTextMode().path.split(os.sep),
         )
         .add("mode", "memory")
+        .add("cache", "shared")
         .to_text()
     )
 
@@ -371,7 +372,6 @@ class VoucherStore(object):
             raise TypeError("{} returned {}, expected datetime".format(self.now, now))
 
         voucher_text = voucher.decode("ascii")
-
         cursor.execute(
             """
             SELECT [text]
@@ -381,7 +381,9 @@ class VoucherStore(object):
             (voucher_text, counter),
         )
         rows = cursor.fetchall()
+        print("HIHI", rows)
         if len(rows) > 0:
+            print("DINg")
             self._log.info(
                 "Loaded {count} random tokens for a voucher ({voucher}[{counter}]).",
                 count=len(rows),
@@ -399,13 +401,16 @@ class VoucherStore(object):
                 voucher=voucher_text,
                 counter=counter,
             )
+            print("make voucher")
             with cursor.important():
+                print("zzz hahah")
                 cursor.execute(
                     """
                     INSERT OR IGNORE INTO [vouchers] ([number], [expected-tokens], [created]) VALUES (?, ?, ?)
                     """,
                     (voucher_text, expected_tokens, self.now()),
                 )
+                print("now, more")
                 cursor.executemany(
                     """
                     INSERT INTO [tokens] ([voucher], [counter], [text]) VALUES (?, ?, ?)
