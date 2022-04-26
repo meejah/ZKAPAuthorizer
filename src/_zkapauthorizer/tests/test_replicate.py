@@ -314,12 +314,16 @@ class ReplicationServiceTests(TestCase):
     Tests for ``_ReplicationService``.
     """
 
-    def test_enable_replication_on_connection(self):
+    @given(tahoe_configs(), datetimes())
+    def test_enable_replication_on_connection(self, get_config, now):
         """
         When the service starts it enables replication on its database connection.
         """
-        conn = memory_connect("/foo/bar")
-        replicating_conn = with_postponed_replication(conn)
-        service = replication_service(replicating_conn)
+        tvs = self.useFixture(TemporaryVoucherStore(get_config, lambda: now))
+        other_connection = memory_connect(tvs.config.get_private_path(CONFIG_DB_NAME))
+
+        def uploader(name, get_bytes):
+            pass
+        service = replication_service(tvs.store._connection, other_connection, tvs.store, uploader)
         service.startService()
-        self.assertThat(replicating_conn._replicating, Equals(True))
+        self.assertThat(tvs.store._connection._replicating, Equals(True))

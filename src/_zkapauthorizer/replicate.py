@@ -61,7 +61,7 @@ __all__ = [
 
 from io import BytesIO
 from sqlite3 import Connection, Cursor
-from typing import BinaryIO, Callable, Iterator, Optional
+from typing import BinaryIO, Callable, Iterator, Optional, Awaitable
 
 import cbor2
 from attrs import Factory, define, field, frozen

@@ -21,6 +21,7 @@ import random
 from datetime import datetime
 from functools import partial
 from sqlite3 import connect as _connect
+from sqlite3 import Connection
 from typing import Any, Callable
 from weakref import WeakValueDictionary
 
