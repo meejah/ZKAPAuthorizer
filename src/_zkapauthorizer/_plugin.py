@@ -20,8 +20,8 @@ Tahoe-LAFS.
 import random
 from datetime import datetime
 from functools import partial
-from sqlite3 import connect as _connect
 from sqlite3 import Connection
+from sqlite3 import connect as _connect
 from typing import Any, Callable
 from weakref import WeakValueDictionary
 
@@ -58,17 +58,17 @@ from .model import VoucherStore
 from .model import open_database as _open_database
 from .recover import make_fail_downloader
 from .replicate import (
+    Uploader,
+    get_replica_rwcap,
+    get_tahoe_lafs_direntry_uploader,
     is_replication_setup,
     replication_service,
     setup_tahoe_lafs_replication,
-    Uploader,
 )
 from .resource import from_configuration as resource_from_configuration
 from .server.spending import get_spender
 from .spending import SpendingController
 from .storage_common import BYTES_PER_PASS, get_configured_pass_value
-from .tahoe import get_tahoe_client
-from .replicate import get_replica_rwcap, get_tahoe_lafs_direntry_uploader
 from .tahoe import ITahoeClient, get_tahoe_client
 
 _log = Logger()
@@ -150,7 +150,9 @@ class ZKAPAuthorizer(object):
             s = self._stores[key]
         except KeyError:
             s = open_store(datetime.now, _connect, node_config)
-            private_conn = _open_database(partial(_connect, node_config.get_private_path(CONFIG_DB_NAME)))
+            private_conn = _open_database(
+                partial(_connect, node_config.get_private_path(CONFIG_DB_NAME))
+            )
 
             if is_replication_setup(node_config):
                 client = get_tahoe_client(self.reactor, node_config)
@@ -160,7 +162,9 @@ class ZKAPAuthorizer(object):
             self._stores[key] = s
         return s
 
-    def _add_replication_service(self, store: VoucherStore, private_conn: Connection, uploader: Uploader) -> None:
+    def _add_replication_service(
+        self, store: VoucherStore, private_conn: Connection, uploader: Uploader
+    ) -> None:
         """
         Create a replication service for the given database and arrange for it to
         start and stop when the reactor starts and stops.

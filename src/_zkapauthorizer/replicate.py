@@ -61,7 +61,7 @@ __all__ = [
 
 from io import BytesIO
 from sqlite3 import Connection, Cursor
-from typing import BinaryIO, Callable, Iterator, Optional, Awaitable
+from typing import Awaitable, BinaryIO, Callable, Iterator, Optional
 
 import cbor2
 from attrs import Factory, define, field, frozen
@@ -72,10 +72,10 @@ from twisted.python.failure import Failure
 from twisted.python.filepath import FilePath
 from twisted.python.lockfile import FilesystemLock
 
+from ._types import CapStr
 from .config import REPLICA_RWCAP_BASENAME, Config
 from .sql import bind_arguments, statement_mutates
 from .tahoe import ITahoeClient, attenuate_writecap
-from ._types import CapStr
 
 
 @frozen
@@ -290,7 +290,11 @@ class _ReplicationCapableConnection:
                 yield ob(cursor, to_signal)
 
     def cursor(self):
-        return _ReplicationCapableCursor(self._conn.cursor(), self) if self._replicating else self._conn.cursor()
+        return (
+            _ReplicationCapableCursor(self._conn.cursor(), self)
+            if self._replicating
+            else self._conn.cursor()
+        )
 
 
 @define
@@ -538,8 +542,8 @@ class _ReplicationService(Service):
             print("got trigger")
             try:
                 await self._do_one_upload()
-                #from twisted.internet import reactor
-                #await reactor.callLater(0, self._do_one_upload)
+                # from twisted.internet import reactor
+                # await reactor.callLater(0, self._do_one_upload)
             except Exception:
                 # probably log the error?
                 raise
@@ -561,7 +565,9 @@ class _ReplicationService(Service):
         # prune the database
         with self._private_connection:
             curse = self._private_connection.cursor()
-            self._store.prune_events_to.wrapped(self._store, curse, events.highest_sequence())
+            self._store.prune_events_to.wrapped(
+                self._store, curse, events.highest_sequence()
+            )
 
     def stopService(self) -> Deferred:
         """
@@ -600,7 +606,9 @@ class _ReplicationService(Service):
         for (important, statement, list_of_args) in all_changes:
             for args in list_of_args:
                 bound_statement = bind_arguments(unobserved_cursor, statement, args)
-                self._store.add_event.wrapped(self._store, unobserved_cursor, bound_statement)
+                self._store.add_event.wrapped(
+                    self._store, unobserved_cursor, bound_statement
+                )
                 # note that we're ignoring a certain amount of size overhead
                 # here: the _actual_ size will be some CBOR information and
                 # the sequence number, although the statement text should
@@ -621,9 +629,16 @@ class _ReplicationService(Service):
         return self._accumulated_size >= 570000
 
 
-def replication_service(replicated_connection, private_connection, store, uploader) -> IService:
+def replication_service(
+    replicated_connection, private_connection, store, uploader
+) -> IService:
     """
     Return a service which implements the replication process documented in
     the ``backup-recovery`` design document.
     """
-    return _ReplicationService(connection=replicated_connection, private_connection=private_connection, store=store, uploader=uploader)
+    return _ReplicationService(
+        connection=replicated_connection,
+        private_connection=private_connection,
+        store=store,
+        uploader=uploader,
+    )

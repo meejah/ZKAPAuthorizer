@@ -2,42 +2,40 @@
 Tests for the replication system in ``_zkapauthorizer.replicate``.
 """
 
-from ..config import CONFIG_DB_NAME
+from base64 import b64encode, urlsafe_b64encode
+from datetime import datetime
+from functools import partial
+from io import BytesIO
+from os import urandom
+from sqlite3 import OperationalError, ProgrammingError, connect
 
 from hypothesis import assume, given
+from testtools import TestCase
+from testtools.matchers import Equals, raises
+from twisted.python.filepath import FilePath
+
+from ..config import CONFIG_DB_NAME, REPLICA_RWCAP_BASENAME
+from ..model import RandomToken, memory_connect
+from ..recover import recover
+from ..replicate import (
+    get_replica_rwcap,
+    get_tahoe_lafs_direntry_uploader,
+    replication_service,
+    with_replication,
+)
+from ..tahoe import MemoryGrid, attenuate_writecap
+from .fixtures import TempDir, TemporaryVoucherStore
+from .matchers import equals_database
 from .strategies import (
     clocks,
+    datetimes,
     dummy_ristretto_keys,
     redemption_group_counts,
     tahoe_configs,
     voucher_counters,
     voucher_objects,
     vouchers,
-    datetimes,
 )
-from base64 import b64encode, urlsafe_b64encode
-from os import urandom
-from datetime import datetime
-
-from functools import partial
-from io import BytesIO
-from sqlite3 import OperationalError, ProgrammingError, connect
-
-from .fixtures import TempDir, TemporaryVoucherStore
-from .matchers import equals_database
-from testtools import TestCase
-from testtools.matchers import Equals, raises
-from twisted.python.filepath import FilePath
-
-from ..model import memory_connect
-from ..model import RandomToken
-from ..config import REPLICA_RWCAP_BASENAME
-from ..recover import recover
-from ..replicate import with_replication, replication_service, get_replica_rwcap, get_tahoe_lafs_direntry_uploader
-from ..tahoe import MemoryGrid, attenuate_writecap
-from ..recover import recover
-from ..replicate import replication_service, with_replication
-from .matchers import equals_database
 
 # Helper to construct the replication wrapper without immediately enabling
 # replication.
@@ -218,9 +216,9 @@ class ReplicationConnectionTests(TestCase):
         )
 
 
-from twisted.trial.unittest import TestCase as TrialTestCase
-from twisted.internet.defer import inlineCallbacks, Deferred
 from allmydata.client import config_from_string
+from twisted.internet.defer import Deferred, inlineCallbacks
+from twisted.trial.unittest import TestCase as TrialTestCase
 
 
 class ReplicationServiceTests(TrialTestCase):
@@ -230,8 +228,7 @@ class ReplicationServiceTests(TrialTestCase):
 
     @inlineCallbacks
     def test_replicate(self):
-        """
-        """
+        """ """
         grid = MemoryGrid()
 
         def get_config(rootpath, portnumfile):
@@ -246,7 +243,7 @@ class ReplicationServiceTests(TrialTestCase):
         rwcap_file.setContent(b"URL:DIR2:stuff")
 
         mutable = get_replica_rwcap(tvs.config)
-        #uploader = get_tahoe_lafs_direntry_uploader(client, mutable)
+        # uploader = get_tahoe_lafs_direntry_uploader(client, mutable)
 
         uploads = []
         d = Deferred()
@@ -264,32 +261,25 @@ class ReplicationServiceTests(TrialTestCase):
                 d = None
 
         other_connection = memory_connect(tvs.config.get_private_path(CONFIG_DB_NAME))
-        srv = replication_service(tvs.store._connection, other_connection, tvs.store, uploader)
+        srv = replication_service(
+            tvs.store._connection, other_connection, tvs.store, uploader
+        )
 
         # run the service and produce some fake voucher etc changes
         # that cause "events" to be issued into the database
         srv.startService()
 
-        tokens = [
-            RandomToken(b64encode(urandom(96)))
-            for _ in range(10)
-        ]
+        tokens = [RandomToken(b64encode(urandom(96))) for _ in range(10)]
         voucher = urlsafe_b64encode(urandom(32))
         srv._store.add(voucher, len(tokens), 1, lambda: tokens)
 
         self.assertNoResult(d)
 
-        tokens = [
-            RandomToken(b64encode(urandom(96)))
-            for _ in range(10)
-        ]
+        tokens = [RandomToken(b64encode(urandom(96))) for _ in range(10)]
         voucher = urlsafe_b64encode(urandom(32))
         srv._store.add(voucher, len(tokens), 1, lambda: tokens)
 
-        tokens = [
-            RandomToken(b64encode(urandom(96)))
-            for _ in range(10)
-        ]
+        tokens = [RandomToken(b64encode(urandom(96))) for _ in range(10)]
         voucher = urlsafe_b64encode(urandom(32))
         srv._store.add(voucher, len(tokens), 1, lambda: tokens)
 
@@ -325,6 +315,9 @@ class ReplicationServiceTests(TestCase):
 
         def uploader(name, get_bytes):
             pass
-        service = replication_service(tvs.store._connection, other_connection, tvs.store, uploader)
+
+        service = replication_service(
+            tvs.store._connection, other_connection, tvs.store, uploader
+        )
         service.startService()
         self.assertThat(tvs.store._connection._replicating, Equals(True))
