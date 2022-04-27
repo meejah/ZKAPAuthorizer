@@ -289,6 +289,7 @@ class _ReplicationCapableConnection:
                 yield ob(cursor, to_signal)
 
     def cursor(self):
+        return _ReplicationCapableCursor(self._conn.cursor(), self)
         return (
             _ReplicationCapableCursor(self._conn.cursor(), self)
             if self._replicating
