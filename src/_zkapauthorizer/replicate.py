@@ -516,6 +516,7 @@ class _ReplicationService(Service):
             """
             err.trap(CancelledError)
             return None
+
         self._replicating.addErrback(catch_cancelled)
         # if something besides a "cancel" happens, do something with it
         self._replicating.addErrback(self._replication_fail)

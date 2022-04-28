@@ -169,7 +169,9 @@ class ZKAPAuthorizer(object):
         Create a replication service for the given database and arrange for it to
         start and stop when the reactor starts and stops.
         """
-        replication_service(store._connection, private_conn, store, uploader).setServiceParent(self._service)
+        replication_service(
+            store._connection, private_conn, store, uploader
+        ).setServiceParent(self._service)
 
     def _get_redeemer(self, node_config, announcement):
         """
