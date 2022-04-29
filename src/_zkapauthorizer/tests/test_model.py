@@ -499,7 +499,7 @@ class VoucherStoreSnapshotTests(TestCase):
     @given(
         posix_safe_datetimes(),
         vouchers(),
-        integers(min_value=1, max_value=2**63 - 1),
+        integers(min_value=1, max_value=2 ** 63 - 1),
         lists(random_tokens(), unique=True),
     )
     def test_vouchers(self, now, voucher, expected, tokens):
@@ -787,7 +787,7 @@ class LeaseMaintenanceTests(TestCase):
                 lists(
                     tuples(
                         # The activity itself, in pass count
-                        integers(min_value=1, max_value=2**16 - 1),
+                        integers(min_value=1, max_value=2 ** 16 - 1),
                         # Amount by which to trim back the share sizes.  This
                         # might exceed the value of a single pass but we don't
                         # know that value yet.  We'll map it into a coherent
@@ -1192,7 +1192,7 @@ class UnblindedTokenStoreTests(TestCase):
         #
         # Better factoring for this would probably be to have a
         # exponential_integers() strategy... Maybe?
-        extra = 2**extra_bits
+        extra = 2 ** extra_bits
         extra += extra_fuzz % extra
         self.assertThat(
             lambda: store.get_unblinded_tokens(num_tokens + extra),
